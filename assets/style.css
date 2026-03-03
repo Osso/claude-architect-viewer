@@ -246,11 +246,20 @@ body {
 }
 
 .message-label {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
   font-size: var(--text-xs);
   color: var(--text-inactive);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 4px;
+}
+
+.message-time {
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-inactive);
 }
 
 .message-text {

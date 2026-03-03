@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -33,21 +33,8 @@ pub struct TokenUsage {
     pub cache_creation: u64,
 }
 
-fn jsonl_path_for_session(session_id: &str) -> Option<PathBuf> {
-    let projects_dir = dirs::home_dir()?.join(".claude").join("projects");
-    let entries = std::fs::read_dir(&projects_dir).ok()?;
-
-    for entry in entries.flatten() {
-        if !entry.file_type().ok()?.is_dir() {
-            continue;
-        }
-        let candidate = entry.path().join(format!("{}.jsonl", session_id));
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+fn log_path_for_project(name: &str) -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("claude-architect").join("logs").join(format!("{name}.jsonl")))
 }
 
 pub fn load_sessions() -> Vec<ProjectEntry> {
@@ -71,7 +58,7 @@ pub fn load_sessions() -> Vec<ProjectEntry> {
         .filter_map(|(name, val)| {
             let session_id = val.get("session_id")?.as_str()?.to_string();
             let validations = val.get("validations")?.as_u64().unwrap_or(0) as u32;
-            let jsonl_path = jsonl_path_for_session(&session_id);
+            let jsonl_path = log_path_for_project(&name);
             Some(ProjectEntry {
                 name,
                 session_id,
@@ -85,119 +72,48 @@ pub fn load_sessions() -> Vec<ProjectEntry> {
     entries
 }
 
-const SKIP_TYPES: &[&str] = &[
-    "progress",
-    "queue-operation",
-    "system",
-    "file-history-snapshot",
-];
-
 fn parse_token_usage(usage: &Value) -> Option<TokenUsage> {
     Some(TokenUsage {
-        input: usage.get("input_tokens")?.as_u64().unwrap_or(0),
-        output: usage.get("output_tokens")?.as_u64().unwrap_or(0),
-        cache_read: usage
-            .get("cache_read_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        cache_creation: usage
-            .get("cache_creation_input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
+        input: usage.get("input")?.as_u64().unwrap_or(0),
+        output: usage.get("output")?.as_u64().unwrap_or(0),
+        cache_read: usage.get("cache_read").and_then(|v| v.as_u64()).unwrap_or(0),
+        cache_creation: usage.get("cache_creation").and_then(|v| v.as_u64()).unwrap_or(0),
     })
 }
 
-fn parse_line(line: &str, seen_uuids: &mut HashSet<String>) -> Option<ChatMessage> {
+fn parse_line(line: &str) -> Option<ChatMessage> {
     let val: Value = serde_json::from_str(line).ok()?;
-
     let msg_type = val.get("type")?.as_str()?;
-    if SKIP_TYPES.contains(&msg_type) {
-        return None;
-    }
-
-    let uuid = val.get("uuid").and_then(|u| u.as_str()).unwrap_or("").to_string();
-    if !uuid.is_empty() {
-        if seen_uuids.contains(&uuid) {
-            return None;
-        }
-        seen_uuids.insert(uuid);
-    }
-
-    let timestamp = val
-        .get("timestamp")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
+    let timestamp = val.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
 
     match msg_type {
-        "user" => parse_user_message(&val, timestamp),
-        "assistant" => parse_assistant_message(&val, timestamp),
+        "user" => {
+            let text = val.get("text")?.as_str()?.to_string();
+            Some(ChatMessage::User { text, timestamp })
+        }
+        "assistant" => {
+            let text = val.get("text")?.as_str()?.to_string();
+            let usage = val.get("usage").and_then(parse_token_usage);
+            Some(ChatMessage::Assistant { text, timestamp, usage })
+        }
         _ => None,
     }
 }
 
-fn parse_user_message(val: &Value, timestamp: String) -> Option<ChatMessage> {
-    let content = val.get("message")?.get("content")?;
-
-    let text = match content {
-        Value::String(s) => s.clone(),
-        Value::Array(_) => return None, // tool results, skip
-        _ => return None,
-    };
-
-    if text.trim().is_empty() {
-        return None;
-    }
-
-    Some(ChatMessage::User { text, timestamp })
-}
-
-fn parse_assistant_message(val: &Value, timestamp: String) -> Option<ChatMessage> {
-    let message = val.get("message")?;
-    let content = message.get("content")?.as_array()?;
-
-    let text = extract_text_blocks(content)?;
-    let usage = message.get("usage").and_then(|u| parse_token_usage(u));
-
-    Some(ChatMessage::Assistant {
-        text,
-        timestamp,
-        usage,
-    })
-}
-
-fn extract_text_blocks(content: &[Value]) -> Option<String> {
-    let mut parts: Vec<&str> = Vec::new();
-
-    for block in content {
-        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                parts.push(text);
-            }
-        }
-    }
-
-    if parts.is_empty() {
-        return None;
-    }
-
-    Some(parts.join("\n"))
-}
-
-pub fn parse_jsonl_from_offset(path: &Path, offset: u64) -> (Vec<ChatMessage>, u64) {
+pub fn parse_jsonl_from_offset(path: &Path, offset: u64) -> (Vec<ChatMessage>, u64, bool) {
     let mut file = match File::open(path) {
         Ok(f) => f,
-        Err(_) => return (vec![], offset),
+        Err(_) => return (vec![], offset, false),
     };
 
     if file.seek(SeekFrom::Start(offset)).is_err() {
-        return (vec![], offset);
+        return (vec![], offset, false);
     }
 
     let mut reader = BufReader::new(&mut file);
-    let mut seen_uuids = HashSet::new();
     let mut messages = Vec::new();
     let mut current_offset = offset;
+    let mut had_reset = false;
 
     loop {
         let mut line = String::new();
@@ -210,10 +126,19 @@ pub fn parse_jsonl_from_offset(path: &Path, offset: u64) -> (Vec<ChatMessage>, u
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(msg) = parse_line(trimmed, &mut seen_uuids) {
+
+        if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+            if val.get("type").and_then(|t| t.as_str()) == Some("session_reset") {
+                messages.clear();
+                had_reset = true;
+                continue;
+            }
+        }
+
+        if let Some(msg) = parse_line(trimmed) {
             messages.push(msg);
         }
     }
 
-    (messages, current_offset)
+    (messages, current_offset, had_reset)
 }

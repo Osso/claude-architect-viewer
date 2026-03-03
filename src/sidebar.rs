@@ -17,7 +17,7 @@ fn ProjectRow(project: ProjectEntry, is_active: bool) -> Element {
                 messages.set(Vec::new());
                 offset.set(0);
                 if let Some(ref path) = jsonl_path {
-                    let (msgs, new_off) = crate::state::parse_jsonl_from_offset(path, 0);
+                    let (msgs, new_off, _) = crate::state::parse_jsonl_from_offset(path, 0);
                     messages.set(msgs);
                     offset.set(new_off);
                 }

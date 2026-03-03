@@ -23,7 +23,10 @@ fn desktop_config() -> dioxus::desktop::Config {
 
 fn load_project_messages(proj: &ProjectEntry, offset: u64) -> (Vec<ChatMessage>, u64) {
     match &proj.jsonl_path {
-        Some(path) => state::parse_jsonl_from_offset(path, offset),
+        Some(path) => {
+            let (msgs, off, _) = state::parse_jsonl_from_offset(path, offset);
+            (msgs, off)
+        }
         None => (Vec::new(), 0),
     }
 }
@@ -75,11 +78,13 @@ fn handle_jsonl_changed(
         return;
     }
     let cur_offset = *offset.read();
-    let (new_msgs, new_off) = state::parse_jsonl_from_offset(&path, cur_offset);
-    if !new_msgs.is_empty() {
+    let (new_msgs, new_off, had_reset) = state::parse_jsonl_from_offset(&path, cur_offset);
+    if had_reset {
+        messages.set(new_msgs);
+    } else if !new_msgs.is_empty() {
         messages.write().extend(new_msgs);
-        offset.set(new_off);
     }
+    offset.set(new_off);
 }
 
 fn setup_selection_effect(

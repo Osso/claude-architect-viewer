@@ -23,7 +23,7 @@ pub fn start_watcher() -> std_mpsc::Receiver<WatchEvent> {
         };
 
         watch_sessions_file(&mut watcher);
-        watch_projects_dir(&mut watcher);
+        watch_logs_dir(&mut watcher);
 
         loop {
             match notify_rx.recv() {
@@ -49,8 +49,8 @@ fn sessions_path() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("claude-architect").join("sessions.json"))
 }
 
-fn projects_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|d| d.join(".claude").join("projects"))
+fn logs_path() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("claude-architect").join("logs"))
 }
 
 fn watch_sessions_file(watcher: &mut RecommendedWatcher) {
@@ -72,24 +72,21 @@ fn watch_sessions_file(watcher: &mut RecommendedWatcher) {
     }
 }
 
-fn watch_projects_dir(watcher: &mut RecommendedWatcher) {
-    let path = match projects_path() {
+fn watch_logs_dir(watcher: &mut RecommendedWatcher) {
+    let path = match logs_path() {
         Some(p) => p,
         None => {
-            tracing::warn!("Could not resolve ~/.claude/projects path");
+            tracing::warn!("Could not resolve logs path");
             return;
         }
     };
 
     if !path.exists() {
-        tracing::warn!(
-            "~/.claude/projects not found at {}, skipping watch",
-            path.display()
-        );
+        tracing::warn!("logs dir not found at {}, skipping watch", path.display());
         return;
     }
 
-    if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
+    if let Err(e) = watcher.watch(&path, RecursiveMode::NonRecursive) {
         tracing::warn!("Failed to watch {}: {}", path.display(), e);
     }
 }
