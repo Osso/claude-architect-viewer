@@ -184,33 +184,6 @@ fn extract_text_blocks(content: &[Value]) -> Option<String> {
     Some(parts.join("\n"))
 }
 
-pub fn parse_jsonl(path: &Path) -> Vec<ChatMessage> {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return vec![],
-    };
-
-    let reader = BufReader::new(file);
-    let mut seen_uuids = HashSet::new();
-    let mut messages = Vec::new();
-
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(msg) = parse_line(trimmed, &mut seen_uuids) {
-            messages.push(msg);
-        }
-    }
-
-    messages
-}
-
 pub fn parse_jsonl_from_offset(path: &Path, offset: u64) -> (Vec<ChatMessage>, u64) {
     let mut file = match File::open(path) {
         Ok(f) => f,
