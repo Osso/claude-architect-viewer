@@ -1,8 +1,8 @@
-mod state;
-mod watcher;
-mod sidebar;
 mod chat;
 mod message;
+mod sidebar;
+mod state;
+mod watcher;
 
 use dioxus::prelude::*;
 use state::{ChatMessage, ProjectEntry};
@@ -113,32 +113,55 @@ fn setup_watcher_future(
     selected: Signal<Option<String>>,
 ) {
     use_future(move || async move {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        std::thread::spawn(move || {
-            let std_rx = watcher::start_watcher();
-            while let Ok(event) = std_rx.recv() {
-                if tx.send(event).is_err() {
-                    break;
-                }
-            }
-        });
+        let mut rx = spawn_watcher_bridge();
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            while let Ok(event) = rx.try_recv() {
-                match event {
-                    watcher::WatchEvent::SessionsChanged => {
-                        let new_projects = state::load_sessions();
-                        handle_sessions_changed(
-                            new_projects, projects, messages, offset, selected,
-                        );
-                    }
-                    watcher::WatchEvent::JsonlChanged(path) => {
-                        handle_jsonl_changed(path, projects, messages, offset, selected);
-                    }
-                }
+            drain_watch_events(&mut rx, projects, messages, offset, selected);
+        }
+    });
+}
+
+fn spawn_watcher_bridge() -> tokio::sync::mpsc::UnboundedReceiver<watcher::WatchEvent> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let std_rx = watcher::start_watcher();
+        while let Ok(event) = std_rx.recv() {
+            if tx.send(event).is_err() {
+                break;
             }
         }
     });
+    rx
+}
+
+fn drain_watch_events(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<watcher::WatchEvent>,
+    projects: Signal<Vec<ProjectEntry>>,
+    messages: Signal<Vec<ChatMessage>>,
+    offset: Signal<u64>,
+    selected: Signal<Option<String>>,
+) {
+    while let Ok(event) = rx.try_recv() {
+        apply_watch_event(event, projects, messages, offset, selected);
+    }
+}
+
+fn apply_watch_event(
+    event: watcher::WatchEvent,
+    projects: Signal<Vec<ProjectEntry>>,
+    messages: Signal<Vec<ChatMessage>>,
+    offset: Signal<u64>,
+    selected: Signal<Option<String>>,
+) {
+    match event {
+        watcher::WatchEvent::SessionsChanged => {
+            let new_projects = state::load_sessions();
+            handle_sessions_changed(new_projects, projects, messages, offset, selected);
+        }
+        watcher::WatchEvent::JsonlChanged(path) => {
+            handle_jsonl_changed(path, projects, messages, offset, selected);
+        }
+    }
 }
 
 fn main() {

@@ -1,6 +1,6 @@
-use dioxus::prelude::*;
-use crate::state::{ChatMessage, ProjectEntry, TokenUsage};
 use crate::message::MessageRow;
+use crate::state::{ChatMessage, ProjectEntry, TokenUsage};
+use dioxus::prelude::*;
 
 fn sum_token_usage(messages: &[ChatMessage]) -> Option<TokenUsage> {
     let usages: Vec<&TokenUsage> = messages
@@ -62,13 +62,21 @@ fn MessageList(msgs: Vec<ChatMessage>) -> Element {
     });
     rsx! {
         div { id: "message-list", class: "message-list",
-            if msgs.is_empty() {
-                div { class: "chat-empty", "No messages yet" }
-            } else {
-                for (i, msg) in msgs.into_iter().enumerate() {
-                    MessageRow { key: "{i}", msg }
-                }
-            }
+            MessageRows { msgs }
+        }
+    }
+}
+
+#[component]
+fn MessageRows(msgs: Vec<ChatMessage>) -> Element {
+    if msgs.is_empty() {
+        return rsx! {
+            div { class: "chat-empty", "No messages yet" }
+        };
+    }
+    rsx! {
+        for (i, msg) in msgs.into_iter().enumerate() {
+            MessageRow { key: "{i}", msg }
         }
     }
 }

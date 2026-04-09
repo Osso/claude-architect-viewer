@@ -1,5 +1,5 @@
-use dioxus::prelude::*;
 use crate::state::{ChatMessage, ProjectEntry};
+use dioxus::prelude::*;
 
 #[component]
 fn ProjectRow(project: ProjectEntry, is_active: bool) -> Element {
@@ -32,24 +32,32 @@ fn ProjectRow(project: ProjectEntry, is_active: bool) -> Element {
 pub fn Sidebar() -> Element {
     let projects = use_context::<Signal<Vec<ProjectEntry>>>();
     let selected = use_context::<Signal<Option<String>>>();
+    let active_project = selected.read().clone();
+    let project_values = projects.read().clone();
 
     rsx! {
         div { class: "sidebar",
             div { class: "sidebar-header", "PROJECTS" }
-            div { class: "sidebar-list",
-                for project in projects.read().clone().into_iter() {
-                    {
-                        let is_active = selected.read().as_deref() == Some(project.name.as_str());
-                        rsx! {
-                            ProjectRow {
-                                key: "{project.name}",
-                                project: project,
-                                is_active: is_active,
-                            }
-                        }
-                    }
-                }
+            SidebarList { projects: project_values, active_project }
+        }
+    }
+}
+
+#[component]
+fn SidebarList(projects: Vec<ProjectEntry>, active_project: Option<String>) -> Element {
+    let rows = projects.into_iter().map(|project| {
+        rsx! {
+            ProjectRow {
+                key: "{project.name}",
+                is_active: active_project.as_deref() == Some(project.name.as_str()),
+                project,
             }
+        }
+    });
+
+    rsx! {
+        div { class: "sidebar-list",
+            {rows}
         }
     }
 }

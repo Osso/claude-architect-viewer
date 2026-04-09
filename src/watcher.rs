@@ -26,18 +26,11 @@ pub fn start_watcher() -> std_mpsc::Receiver<WatchEvent> {
         watch_logs_dir(&mut watcher);
 
         loop {
-            match notify_rx.recv() {
-                Ok(Ok(event)) => {
-                    if let Some(watch_event) = classify_event(event) {
-                        if tx.send(watch_event).is_err() {
-                            break;
-                        }
-                    }
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!("Watch error: {}", e);
-                }
-                Err(_) => break,
+            let Ok(notify_event) = notify_rx.recv() else {
+                break;
+            };
+            if handle_notify_event(&tx, notify_event).is_err() {
+                break;
             }
         }
     });
@@ -63,7 +56,10 @@ fn watch_sessions_file(watcher: &mut RecommendedWatcher) {
     };
 
     if !path.exists() {
-        tracing::warn!("sessions.json not found at {}, skipping watch", path.display());
+        tracing::warn!(
+            "sessions.json not found at {}, skipping watch",
+            path.display()
+        );
         return;
     }
 
@@ -110,10 +106,31 @@ fn classify_event(event: Event) -> Option<WatchEvent> {
     None
 }
 
+fn handle_notify_event(
+    tx: &std_mpsc::Sender<WatchEvent>,
+    notify_event: notify::Result<Event>,
+) -> Result<(), std_mpsc::SendError<WatchEvent>> {
+    match notify_event {
+        Ok(event) => forward_watch_event(tx, event),
+        Err(error) => {
+            tracing::warn!("Watch error: {}", error);
+            Ok(())
+        }
+    }
+}
+
+fn forward_watch_event(
+    tx: &std_mpsc::Sender<WatchEvent>,
+    event: Event,
+) -> Result<(), std_mpsc::SendError<WatchEvent>> {
+    let Some(watch_event) = classify_event(event) else {
+        return Ok(());
+    };
+    tx.send(watch_event)
+}
+
 fn is_sessions_file(path: &std::path::Path) -> bool {
-    sessions_path()
-        .map(|p| path == p)
-        .unwrap_or(false)
+    sessions_path().map(|p| path == p).unwrap_or(false)
 }
 
 fn is_jsonl_file(path: &std::path::Path) -> bool {
