@@ -34,7 +34,11 @@ pub struct TokenUsage {
 }
 
 fn log_path_for_project(name: &str) -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("claude-architect").join("logs").join(format!("{name}.jsonl")))
+    dirs::data_dir().map(|d| {
+        d.join("claude-architect")
+            .join("logs")
+            .join(format!("{name}.jsonl"))
+    })
 }
 
 pub fn load_sessions() -> Vec<ProjectEntry> {
@@ -76,15 +80,25 @@ fn parse_token_usage(usage: &Value) -> Option<TokenUsage> {
     Some(TokenUsage {
         input: usage.get("input")?.as_u64().unwrap_or(0),
         output: usage.get("output")?.as_u64().unwrap_or(0),
-        cache_read: usage.get("cache_read").and_then(|v| v.as_u64()).unwrap_or(0),
-        cache_creation: usage.get("cache_creation").and_then(|v| v.as_u64()).unwrap_or(0),
+        cache_read: usage
+            .get("cache_read")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        cache_creation: usage
+            .get("cache_creation")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
     })
 }
 
 fn parse_line(line: &str) -> Option<ChatMessage> {
     let val: Value = serde_json::from_str(line).ok()?;
     let msg_type = val.get("type")?.as_str()?;
-    let timestamp = val.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let timestamp = val
+        .get("timestamp")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
 
     match msg_type {
         "user" => {
@@ -94,7 +108,11 @@ fn parse_line(line: &str) -> Option<ChatMessage> {
         "assistant" => {
             let text = val.get("text")?.as_str()?.to_string();
             let usage = val.get("usage").and_then(parse_token_usage);
-            Some(ChatMessage::Assistant { text, timestamp, usage })
+            Some(ChatMessage::Assistant {
+                text,
+                timestamp,
+                usage,
+            })
         }
         _ => None,
     }
