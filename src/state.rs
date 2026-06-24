@@ -160,3 +160,199 @@ pub fn parse_jsonl_from_offset(path: &Path, offset: u64) -> (Vec<ChatMessage>, u
 
     (messages, current_offset, had_reset)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn write_log(name: &str, content: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "claude_architect_viewer_state_{name}_{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(&path, content).expect("write test log");
+        path
+    }
+
+    fn temp_data_home(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "claude_architect_viewer_data_{name}_{}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn parses_user_and_assistant_messages_with_usage() {
+        let path = write_log(
+            "messages",
+            r#"{"type":"user","text":"validate this","timestamp":"2026-01-01T00:00:00Z"}
+{"type":"assistant","text":"approved","timestamp":"2026-01-01T00:00:01Z","usage":{"input":11,"output":22,"cache_read":5,"cache_creation":6}}
+"#,
+        );
+
+        let (messages, offset, had_reset) = parse_jsonl_from_offset(&path, 0);
+
+        assert_eq!(offset, std::fs::metadata(&path).expect("metadata").len());
+        assert!(!had_reset);
+        assert_eq!(
+            messages,
+            vec![
+                ChatMessage::User {
+                    text: "validate this".to_string(),
+                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                },
+                ChatMessage::Assistant {
+                    text: "approved".to_string(),
+                    timestamp: "2026-01-01T00:00:01Z".to_string(),
+                    usage: Some(TokenUsage {
+                        input: 11,
+                        output: 22,
+                        cache_read: 5,
+                        cache_creation: 6,
+                    }),
+                },
+            ]
+        );
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn session_reset_discards_prior_messages() {
+        let path = write_log(
+            "reset",
+            r#"{"type":"assistant","text":"old","timestamp":"t1"}
+{"type":"session_reset"}
+{"type":"user","text":"new","timestamp":"t2"}
+"#,
+        );
+
+        let (messages, _, had_reset) = parse_jsonl_from_offset(&path, 0);
+
+        assert!(had_reset);
+        assert_eq!(
+            messages,
+            vec![ChatMessage::User {
+                text: "new".to_string(),
+                timestamp: "t2".to_string(),
+            }]
+        );
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn offset_reads_incremental_messages_and_missing_file_keeps_offset() {
+        let path = write_log(
+            "offset",
+            r#"{"type":"assistant","text":"old","timestamp":"t1"}
+{"type":"user","text":"new","timestamp":"t2"}
+"#,
+        );
+        let first_line_len = r#"{"type":"assistant","text":"old","timestamp":"t1"}
+"#
+        .len() as u64;
+
+        let (messages, offset, had_reset) = parse_jsonl_from_offset(&path, first_line_len);
+        let missing = path.with_extension("missing");
+        let (missing_messages, missing_offset, missing_reset) =
+            parse_jsonl_from_offset(&missing, 77);
+
+        assert!(!had_reset);
+        assert_eq!(offset, std::fs::metadata(&path).expect("metadata").len());
+        assert_eq!(
+            messages,
+            vec![ChatMessage::User {
+                text: "new".to_string(),
+                timestamp: "t2".to_string(),
+            }]
+        );
+        assert!(missing_messages.is_empty());
+        assert_eq!(missing_offset, 77);
+        assert!(!missing_reset);
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn load_sessions_reads_sorted_session_entries() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let data_home = temp_data_home("sessions");
+        let root = data_home.join("claude-architect");
+        std::fs::create_dir_all(root.join("logs")).expect("create logs");
+        std::fs::write(
+            root.join("sessions.json"),
+            r#"{
+                "zeta": {"session_id": "session-z", "validations": 2},
+                "alpha": {"session_id": "session-a", "validations": 5},
+                "broken": {"validations": 9}
+            }"#,
+        )
+        .expect("write sessions");
+
+        let old_data_home = std::env::var_os("XDG_DATA_HOME");
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &data_home);
+        }
+
+        let sessions = load_sessions();
+
+        match old_data_home {
+            Some(value) => unsafe {
+                std::env::set_var("XDG_DATA_HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_DATA_HOME");
+            },
+        }
+        std::fs::remove_dir_all(data_home).ok();
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].name, "alpha");
+        assert_eq!(sessions[0].session_id, "session-a");
+        assert_eq!(sessions[0].validations, 5);
+        assert!(
+            sessions[0]
+                .jsonl_path
+                .as_ref()
+                .expect("jsonl path")
+                .ends_with("claude-architect/logs/alpha.jsonl")
+        );
+        assert_eq!(sessions[1].name, "zeta");
+    }
+
+    #[test]
+    fn parser_ignores_invalid_lines_and_defaults_optional_usage_fields() {
+        let path = write_log(
+            "invalid",
+            r#"invalid
+{"type":"assistant","text":"partial","timestamp":"t1","usage":{"input":13,"output":21}}
+{"type":"assistant","timestamp":"missing text"}
+{"type":"other","text":"ignored","timestamp":"t2"}
+
+"#,
+        );
+
+        let (messages, _, had_reset) = parse_jsonl_from_offset(&path, 0);
+
+        assert!(!had_reset);
+        assert_eq!(
+            messages,
+            vec![ChatMessage::Assistant {
+                text: "partial".to_string(),
+                timestamp: "t1".to_string(),
+                usage: Some(TokenUsage {
+                    input: 13,
+                    output: 21,
+                    cache_read: 0,
+                    cache_creation: 0,
+                }),
+            }]
+        );
+
+        std::fs::remove_file(path).ok();
+    }
+}
