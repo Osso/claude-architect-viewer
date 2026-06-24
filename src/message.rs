@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, coverage(off))]
+
 use crate::state::{ChatMessage, TokenUsage};
 use dioxus::prelude::*;
 
